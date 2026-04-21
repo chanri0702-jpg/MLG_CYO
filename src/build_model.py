@@ -12,6 +12,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 
 
+test_period_days = 180
+test_start_date = None
+test_end_date = None
+future_pred_start_date = "2026-07-01"
+future_pred_end_date = "2026-07-31"
+
+
 def ticker_exists(ticker):
     try:
         t = yf.Ticker(ticker)
@@ -229,16 +236,111 @@ def create_sequences(data, sequence_length=60):
         y.append(data[i, 0])  # predicting Close price
     return np.array(X), np.array(y)
 
+
+def split_by_test_period(X_daily, X_fund, y, sequence_dates, test_period_days=None, test_start_date=None, test_end_date=None):
+    if len(sequence_dates) == 0:
+        raise ValueError("No sequence dates available for train/test split")
+
+    sequence_dates = pd.to_datetime(sequence_dates)
+
+    if test_start_date is not None:
+        test_start = pd.to_datetime(test_start_date)
+    elif test_period_days is not None:
+        test_start = sequence_dates.max() - pd.Timedelta(days=int(test_period_days) - 1)
+    else:
+        split_idx = int(len(sequence_dates) * 0.8)
+        test_start = sequence_dates[split_idx]
+
+    test_end = pd.to_datetime(test_end_date) if test_end_date is not None else sequence_dates.max()
+
+    test_mask = (sequence_dates >= test_start) & (sequence_dates <= test_end)
+    train_mask = sequence_dates < test_start
+
+    if not test_mask.any():
+        raise ValueError("No samples fall into the selected test period")
+    if not train_mask.any():
+        raise ValueError("No training samples remain before selected test period")
+
+    return (
+        X_daily[train_mask], X_daily[test_mask],
+        X_fund[train_mask], X_fund[test_mask],
+        y[train_mask], y[test_mask],
+        sequence_dates[test_mask]
+    )
+
+
+def train_and_predict_future_period(
+    model,
+    daily_scaled,
+    fundamentals_scaled,
+    daily_scaler,
+    sequence_length,
+    future_start_date,
+    future_end_date,
+    epochs=50,
+    batch_size=32
+):
+    future_start = pd.to_datetime(future_start_date)
+    future_end = pd.to_datetime(future_end_date)
+    if future_end < future_start:
+        raise ValueError("future_end_date must be on or after future_start_date")
+
+    X_daily_full, y_full = create_sequences(daily_scaled, sequence_length=sequence_length)
+    X_fund_full = fundamentals_scaled[sequence_length:]
+    if len(X_daily_full) == 0:
+        raise ValueError("Not enough historical data to train sequences")
+
+    model.fit(
+        [X_daily_full, X_fund_full],
+        y_full,
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=0
+    )
+
+    # Use business days for stock forecasts.
+    future_dates = pd.bdate_range(start=future_start, end=future_end)
+    if len(future_dates) == 0:
+        raise ValueError("No business days found in the requested future period")
+
+    last_sequence = daily_scaled[-sequence_length:].copy()
+    last_fund_vector = fundamentals_scaled[-1].reshape(1, -1)
+    n_daily_features = daily_scaled.shape[1]
+    predictions = []
+
+    for forecast_date in future_dates:
+        pred_scaled = model.predict(
+            [last_sequence.reshape(1, sequence_length, n_daily_features), last_fund_vector],
+            verbose=0
+        )[0, 0]
+
+        row_for_inverse = np.zeros((1, n_daily_features))
+        row_for_inverse[0, 0] = pred_scaled  # daily_cols[0] is Close
+        pred_close = daily_scaler.inverse_transform(row_for_inverse)[0, 0]
+        predictions.append((forecast_date, pred_close))
+
+        next_row = last_sequence[-1].copy()
+        next_row[0] = pred_scaled
+        last_sequence = np.vstack([last_sequence[1:], next_row])
+
+    return pd.DataFrame(predictions, columns=['Date', 'Predicted_Close']).set_index('Date')
+
 X_daily, y = create_sequences(daily_scaled, sequence_length=60)
 X_fund = fundamentals_scaled[60:]  # align with sequences
+sequence_dates = dataset.index[60:]
 
-split = int(len(X_daily) * 0.8)
-X_daily_train = X_daily[:split]
-X_daily_test  = X_daily[split:]
-X_fund_train = X_fund[:split]
-X_fund_test  = X_fund[split:]
-y_train = y[:split]
-y_test  = y[split:]
+X_daily_train, X_daily_test, X_fund_train, X_fund_test, y_train, y_test, test_dates = split_by_test_period(
+    X_daily,
+    X_fund,
+    y,
+    sequence_dates,
+    test_period_days=test_period_days,
+    test_start_date=test_start_date,
+    test_end_date=test_end_date
+)
+
+print(f"Train samples: {len(y_train)} | Test samples: {len(y_test)}")
+print(f"Test period: {test_dates.min().date()} -> {test_dates.max().date()}")
 
 model.fit(
     [X_daily_train, X_fund_train], y_train,
@@ -259,3 +361,18 @@ y_test_actual = daily_scaler.inverse_transform(
 
 rmse = np.sqrt(mean_squared_error(y_test_actual, y_pred_actual))
 mae = mean_absolute_error(y_test_actual, y_pred_actual)
+
+if future_pred_start_date and future_pred_end_date:
+    future_forecast = train_and_predict_future_period(
+        model=model,
+        daily_scaled=daily_scaled,
+        fundamentals_scaled=fundamentals_scaled,
+        daily_scaler=daily_scaler,
+        sequence_length=sequence_length,
+        future_start_date=future_pred_start_date,
+        future_end_date=future_pred_end_date,
+        epochs=50,
+        batch_size=32
+    )
+    print("Future forecast:")
+    print(future_forecast)
