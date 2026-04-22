@@ -12,8 +12,8 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent))
 from data import build_model as bm
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.metrics import r2_score
-from tensorflow.keras.models import Model  
-from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate  
+from tensorflow.keras.models import Model  # type: ignore
+from tensorflow.keras.layers import Input as KInput, Dense, LSTM, Dropout, Concatenate  # type: ignore
 
 #Constants / paths
 
@@ -49,7 +49,10 @@ def _build_sentiment_figure(sentiment: dict, ticker: str) -> go.Figure:
 #---------------------------------------------------------------------------------------------------------------------------------------
 # App
 
-app = dash.Dash(__name__)
+app = dash.Dash(
+    __name__,
+    assets_folder=str(pathlib.Path(__file__).parent.parent / "assets"),
+)
 server = app.server
 
 app.index_string = '''
@@ -59,7 +62,6 @@ app.index_string = '''
     {%metas%}
     <title>Stock Price Predictor</title>
     {%css%}
-    <link href="../assets/dash.css" rel="stylesheet">
   </head>
   <body>
     {%app_entry%}
