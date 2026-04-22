@@ -6,6 +6,7 @@ import dash
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from dash import Input, Output, State, dcc, html
 import sys
 sys.path.append(str(pathlib.Path(__file__).parent.parent))
@@ -119,6 +120,83 @@ def _build_sentiment_figure(sentiment: dict, ticker: str) -> go.Figure:
     return fig
 
 
+def _build_feature_importance_figure(importance_df: pd.DataFrame, ticker: str) -> go.Figure:
+    fig = go.Figure()
+    if importance_df is not None and not importance_df.empty:
+        plot_df = importance_df.head(10).sort_values("importance", ascending=True)
+        fig.add_trace(go.Bar(
+            x=plot_df["importance"],
+            y=plot_df["feature"],
+            orientation="h",
+            marker=dict(color="#00b894"),
+            name="Importance",
+        ))
+
+    fig.update_layout(
+        title=f"Top 10 Features Influencing {ticker} Price",
+        template="plotly_dark",
+        paper_bgcolor="#222",
+        plot_bgcolor="#222",
+        font=dict(family="Courier New", color="#f5f5f5"),
+        xaxis=dict(title="Aggregated Importance"),
+        yaxis=dict(title="Feature"),
+        margin=dict(l=10, r=10, t=50, b=10),
+    )
+    return fig
+
+
+def _build_top_feature_trends_figure(dataset: pd.DataFrame, top_features: list, ticker: str) -> go.Figure:
+    valid_features = [f for f in top_features if f in dataset.columns]
+    if not valid_features:
+        fig = go.Figure()
+        fig.update_layout(
+            title=f"Top Feature Trends: {ticker}",
+            template="plotly_dark",
+            paper_bgcolor="#222",
+            plot_bgcolor="#222",
+            font=dict(family="Courier New", color="#f5f5f5"),
+        )
+        return fig
+
+    rows, cols = 5, 2
+    fig = make_subplots(
+        rows=rows,
+        cols=cols,
+        subplot_titles=valid_features[:10],
+        vertical_spacing=0.12,
+        horizontal_spacing=0.08,
+    )
+
+    recent = dataset.tail(180)
+    for i, feature in enumerate(valid_features[:10]):
+        r = i // cols + 1
+        c = i % cols + 1
+        series = pd.to_numeric(recent[feature], errors="coerce")
+        fig.add_trace(
+            go.Scatter(
+                x=recent.index,
+                y=series,
+                mode="lines",
+                line=dict(width=1.8, color="#4fc3f7"),
+                name=feature,
+                showlegend=False,
+            ),
+            row=r,
+            col=c,
+        )
+
+    fig.update_layout(
+        title=f"Top 10 Feature Trends (Last 180 Rows): {ticker}",
+        template="plotly_dark",
+        paper_bgcolor="#222",
+        plot_bgcolor="#222",
+        font=dict(family="Courier New", color="#f5f5f5"),
+        height=1200,
+        margin=dict(l=10, r=10, t=70, b=20),
+    )
+    return fig
+
+
 #---------------------------------------------------------------------------------------------------------------------------------------
 # App
 
@@ -218,53 +296,94 @@ app.layout = html.Div(
                 # ── Right panel ─────────────────────────────────────────────
                 html.Div(
                     [
-                        # Stock price graph
-                        dcc.Graph(
-                            id="graph-stock",
-                            figure=go.Figure().update_layout(
-                                #Add selecor based titles
-                                title="Graph: Stock Prices",
-                                paper_bgcolor="#111", plot_bgcolor="#111",
-                                font_color="#555",
-                                margin=dict(l=8, r=8, t=40, b=8),
-                            ),
-                            style={"height": "300px", "border": "1px solid #333", "borderRadius": "8px"},
-                        ),
-
-                        # Recommended action + predicted fundamentals label
-                        html.Div(
-                             id="recommended-action", 
-                                      style={"color": "#888", "fontSize": "0.82rem"}),
-                        
-
-                        # Market sentiment gauge
-                        dcc.Graph(
-                            id="graph-sentiment",
-                            figure=go.Figure().update_layout(
-                                title="Market Sentiment",
-                                paper_bgcolor="#111", plot_bgcolor="#111",
-                                font_color="#555",
-                                margin=dict(l=20, r=20, t=60, b=20),
-                            ),
-                            style={"height": "260px", "border": "1px solid #333", "borderRadius": "8px"},
-                        ),
-
-                        # Current company fundamentals
-                        html.Div(
-                        id="current-fundamentals",
-                                      style={"color": "#888", "fontSize": "0.82rem"},
-                        ),
-
-                        # Current market sentiment text
-                        html.Div(
-                            id="current-sentiment",
-                                      style={"color": "#888", "fontSize": "0.82rem"},
-                        ),
-
-                        # Model accuracy row
-                        html.Div(
-                          id="model-accuracy",
-                                      style={"color": "#888", "fontSize": "0.82rem"},
+                        dcc.Tabs(
+                            id="view-tabs",
+                            value="tab-predict",
+                            className="analytics-tabs",
+                            parent_className="analytics-tabs-parent",
+                            content_className="analytics-tabs-content",
+                            children=[
+                                dcc.Tab(
+                                    label="Prediction",
+                                    value="tab-predict",
+                                    className="analytics-tab",
+                                    selected_className="analytics-tab--selected",
+                                    children=[
+                                        dcc.Graph(
+                                            id="graph-stock",
+                                            figure=go.Figure().update_layout(
+                                                title="Graph: Stock Prices",
+                                                paper_bgcolor="#111", plot_bgcolor="#111",
+                                                font_color="#555",
+                                                margin=dict(l=8, r=8, t=40, b=8),
+                                            ),
+                                            className="graph-stock",
+                                            style={"height": "clamp(280px, 38vh, 420px)", "border": "1px solid #333", "borderRadius": "8px"},
+                                        ),
+                                        html.Div(
+                                            id="recommended-action",
+                                            style={"color": "#888", "fontSize": "0.82rem"},
+                                        ),
+                                        dcc.Graph(
+                                            id="graph-sentiment",
+                                            figure=go.Figure().update_layout(
+                                                title="Market Sentiment",
+                                                paper_bgcolor="#111", plot_bgcolor="#111",
+                                                font_color="#555",
+                                                margin=dict(l=20, r=20, t=60, b=20),
+                                            ),
+                                            className="graph-sentiment",
+                                            style={"height": "clamp(220px, 32vh, 320px)", "border": "1px solid #333", "borderRadius": "8px"},
+                                        ),
+                                        html.Div(
+                                            id="current-fundamentals",
+                                            style={"color": "#888", "fontSize": "0.82rem"},
+                                        ),
+                                        html.Div(
+                                            id="current-sentiment",
+                                            style={"color": "#888", "fontSize": "0.82rem"},
+                                        ),
+                                        html.Div(
+                                            id="model-accuracy",
+                                            style={"color": "#888", "fontSize": "0.82rem"},
+                                        ),
+                                    ],
+                                ),
+                                dcc.Tab(
+                                    label="Data Insights",
+                                    value="tab-insights",
+                                    className="analytics-tab",
+                                    selected_className="analytics-tab--selected",
+                                    children=[
+                                        html.Div(
+                                            id="dataset-overview",
+                                            style={"color": "#cfd8dc", "fontSize": "0.82rem", "marginBottom": "12px"},
+                                        ),
+                                        dcc.Graph(
+                                            id="feature-importance-graph",
+                                            figure=go.Figure().update_layout(
+                                                title="Top 10 Feature Importance",
+                                                paper_bgcolor="#111", plot_bgcolor="#111",
+                                                font_color="#555",
+                                                margin=dict(l=20, r=20, t=60, b=20),
+                                            ),
+                                            className="graph-importance",
+                                            style={"height": "clamp(320px, 48vh, 520px)", "border": "1px solid #333", "borderRadius": "8px"},
+                                        ),
+                                        dcc.Graph(
+                                            id="top-features-trend-graph",
+                                            figure=go.Figure().update_layout(
+                                                title="Top Feature Trends",
+                                                paper_bgcolor="#111", plot_bgcolor="#111",
+                                                font_color="#555",
+                                                margin=dict(l=20, r=20, t=60, b=20),
+                                            ),
+                                            className="graph-top-features",
+                                            style={"height": "clamp(540px, 95vh, 1200px)", "border": "1px solid #333", "borderRadius": "8px"},
+                                        ),
+                                    ],
+                                ),
+                            ],
                         ),
                     ],
                     className="right-panel",
@@ -285,6 +404,9 @@ app.layout = html.Div(
     Output("current-fundamentals", "children"),
     Output("current-sentiment", "children"),
     Output("model-accuracy", "children"),
+    Output("dataset-overview", "children"),
+    Output("feature-importance-graph", "figure"),
+    Output("top-features-trend-graph", "figure"),
     Output("error-msg", "children"),
     Input("predict-btn", "n_clicks"),
     State("input-ticker", "value"),
@@ -305,13 +427,15 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         font_color="#555", margin=dict(l=8, r=8, t=40, b=8),
     )
 
+    empty_overview = html.Div("Run a prediction to view dataset insights.", style={"color": "#777"})
+
     if not ticker or not ticker.strip():
-        return empty_fig, empty_fig, None, None, None, None, "Please enter a ticker symbol."
+        return empty_fig, empty_fig, None, None, None, None, empty_overview, empty_fig, empty_fig, "Please enter a ticker symbol."
 
     ticker = ticker.strip().upper()
 
     if not bm.ticker_exists(ticker):
-        return empty_fig, empty_fig, None, None, None, None, f"Ticker '{ticker}' does not exist."
+        return empty_fig, empty_fig, None, None, None, None, empty_overview, empty_fig, empty_fig, f"Ticker '{ticker}' does not exist."
 
     today = datetime.date.today()
 
@@ -322,17 +446,27 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         if start_dt >= end_dt:
             raise ValueError("Start must be before end.")
     except (ValueError, AttributeError) as exc:
-        return empty_fig, empty_fig, None, None, None, None, f"Date error: {exc}"
+        return empty_fig, empty_fig, None, None, None, None, empty_overview, empty_fig, empty_fig, f"Date error: {exc}"
 
     # --- Fetch and build dataset using full historical window ---
     try:
         hist_start, hist_end = bm.get_date_range(ticker)
         dataset, sentiment_df, fundamentals_df, price_data = bm.build_full_dataset(ticker, hist_start, hist_end)
     except Exception as exc:
-        return empty_fig, empty_fig, None, None, None, None, f"Data fetch error: {exc}"
+        return empty_fig, empty_fig, None, None, None, None, empty_overview, empty_fig, empty_fig, f"Data fetch error: {exc}"
 
     if dataset.empty:
-        return empty_fig, empty_fig, None, None, None, None, f"No data available for '{ticker}'."
+        return empty_fig, empty_fig, None, None, None, None, empty_overview, empty_fig, empty_fig, f"No data available for '{ticker}'."
+
+    dataset_overview_children = html.Div([
+        html.H4("Dataset Summary"),
+        html.Div(f"Shape: {dataset.shape[0]} rows x {dataset.shape[1]} columns"),
+        html.Div("Columns:"),
+        html.Ul([html.Li(col) for col in dataset.columns.tolist()]),
+    ], className="info-card")
+
+    feature_importance_fig = empty_fig
+    top_feature_trend_fig = empty_fig
 
     price_data.index = pd.to_datetime(price_data.index)
     latest_actual_date = price_data.index.max().date()
@@ -422,7 +556,7 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         full_X_daily, full_X_fund, full_y, _full_dates, full_daily_scaler, full_fund_scaler = bm.build_sequences(
             dataset, fundamentals_df, sequence_length=60, n_quarters=4
         )
-        full_model = bm.configure_model(60, full_X_daily.shape[2], 4, full_X_fund.shape[2])
+        full_model = bm.configure_model()
         validation_metrics = bm.train_test_validate_model(
             full_model,
             full_X_daily,
@@ -430,6 +564,36 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
             full_y,
             test_size=0.2,
         )
+
+        # Aggregate flattened sequence importances back to base feature names.
+        importances = getattr(full_model, "feature_importances_", None)
+        top_features = []
+        if importances is not None and len(importances) > 0:
+            daily_cols = dataset.columns.tolist()
+            n_daily = len(daily_cols)
+            n_fund = len(fund_cols)
+            daily_span = 60 * n_daily
+            if len(importances) >= daily_span:
+                daily_imp = np.array(importances[:daily_span]).reshape(60, n_daily).sum(axis=0)
+                fund_part = np.array(importances[daily_span:])
+                if n_fund > 0 and len(fund_part) >= 4 * n_fund:
+                    fund_imp = fund_part[:4 * n_fund].reshape(4, n_fund).sum(axis=0)
+                else:
+                    fund_imp = np.zeros(n_fund, dtype=np.float32)
+
+                agg = {}
+                for i, col in enumerate(daily_cols):
+                    agg[col] = agg.get(col, 0.0) + float(daily_imp[i])
+                for i, col in enumerate(fund_cols):
+                    agg[col] = agg.get(col, 0.0) + float(fund_imp[i])
+
+                imp_df = (
+                    pd.DataFrame({"feature": list(agg.keys()), "importance": list(agg.values())})
+                    .sort_values("importance", ascending=False)
+                )
+                top_features = imp_df["feature"].head(10).tolist()
+                feature_importance_fig = _build_feature_importance_figure(imp_df, ticker)
+                top_feature_trend_fig = _build_top_feature_trends_figure(dataset, top_features, ticker)
 
         graph_forecast = bm.train_and_predict_future_period(
             model=full_model,
@@ -616,7 +780,18 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         else:
             sent_children = html.Div("Sentiment data unavailable.", className="info-card", style={"color": "#555"})
 
-    return price_fig, sentiment_fig, rec_children, fund_children, sent_children, accuracy_children, ""
+    return (
+        price_fig,
+        sentiment_fig,
+        rec_children,
+        fund_children,
+        sent_children,
+        accuracy_children,
+        dataset_overview_children,
+        feature_importance_fig,
+        top_feature_trend_fig,
+        "",
+    )
 
 
 # Entry point

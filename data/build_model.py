@@ -270,7 +270,7 @@ def split_by_test_period(X_daily, X_fund, y, sequence_dates, test_start_date=Non
 
 
 def flatten_sequence_features(X_daily, X_fund):
-    """Flatten 3D sequence inputs into a 2D tabular matrix for XGBoost."""
+    #Flatten 3D sequence inputs into a 2D tabular matrix for XGBoost.
     if len(X_daily) == 0 or len(X_fund) == 0:
         return np.empty((0, 0), dtype=np.float32)
     X_daily_flat = X_daily.reshape(X_daily.shape[0], -1)
@@ -279,10 +279,7 @@ def flatten_sequence_features(X_daily, X_fund):
 
 
 def configure_model(
-    sequence_length,
-    n_daily_features,
-    n_quarters,
-    n_fundamental_features
+    
 ):
     # OLD TENSORFLOW LSTM MODEL (kept for reference):
     # daily_input = Input(shape=(sequence_length, n_daily_features))
