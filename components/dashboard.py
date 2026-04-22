@@ -30,20 +30,95 @@ DROPDOWN_STYLE = {
 
 
 #-----------------------------------------------------------ADD CHARTS------------------------------------------------------------------
-
-
-def _build_price_figure(ticker: str, df_full: pd.DataFrame) -> go.Figure:
-    """Build a Plotly figure from the combined historical + predicted DataFrame."""
+#Price Prediction Chart:
+def _build_price_figure(ticker: str, df_full: pd.DataFrame) ->go.Figure:
+     """Build a Plotly figure from the combined historical + predicted DataFrame."""
     fig = go.Figure()
-    
-    return fig
 
+#Filtering the data into 2 groups: the past data as well as the future predictions
+hist_df = df_full[df_full["type"] == "historical"]
+pred_df = df_full[df_full["type"] == "predicted"]
 
-def _build_sentiment_figure(sentiment: dict, ticker: str) -> go.Figure:
-    """Gauge chart for RSI-based sentiment."""
-    fig = go.Figure()
-    
-    return fig
+#adding a line to represent the actual historical stick prices
+fig.add_trace(go.Scatter(
+    x=hist_df["date"],
+    y=hist_df["close"],
+    name="Historical",
+    line=dict(color="#36854a", width=2.5)
+))
+#adding in a dotted line for the predicted prices
+if not pred_df.empty:
+    #getting the last real price to attach the prediction line to
+    last_hist = hist_df.iloc[-1:]
+    conn_pred = pd.concat([last_hist, pred_df], ignore_index=True)
+    fig.add_trace(go.Scatter(
+        x=conn_pred["date"],
+        y=conn_pred["close"],
+        name="Predicted",
+        line=dict(color="#cf3e3e", width=2, dash="dot")
+    ))
+
+#refining the display of the graph
+fig.update_layout(
+    title=f"Price Forecast: {ticker}",
+    templates="plotly_dark",
+    paper_bgcolor="#222",
+    plot_bgcolor="#222",
+    font=dict(family="Courier New", color="#f5f5f5"),
+    xaxis=dict(showgrid=False, title="Date"),
+    yaxis=dict(showgrid=True, gridcolor="#333", title="Price ($)"),
+    margin=dict(l=10, r=10, t=50, b=10),
+    hovermode="x unified"
+)
+return fig
+
+#Sentiment Gauge Chart
+def_build_sentiment_figure(sentiment: dict, ticker: str) ->go.Figure:
+"""Gauge chart for RSI-based sentiment."""
+#we are extracting the RSI value and the calculated signal from the data
+rsi_val = sentiment.get("RSI (14)", 50)
+signal = sentiment.get("Signal", "Neutral")
+
+#the logic in order to change the guage color
+#green: bullish (price going up)
+#red: bearish (price going down)
+#yellow: neutral
+color = "#ffb300"
+if signal == "Bullish":
+    color="#00c853"
+elif signal == "Bearish":
+    color="#ff5252"
+
+#setting up the gauge/indiator component
+fig = go.Figure(go.Indicator(
+    mode="gauge+number",
+    value=rsi_val,
+    title={'text': f"RSI Indicator ({signal})", 'font' : {'size':14}},
+    number={'font': {'color': color}}
+    gauge={
+        'axis': {'range': [0, 100]},
+        'bar': {'color': color},
+        'bgcolor': "#222",
+        'steps':[
+            {'range':[0.30], 'color': 'rgba(255, 82, 82, 0.1)'},
+            {'range': [70,100], 'color': 'rgba(0, 200, 83, 0.1)'}
+        ],
+        'threshold': {
+            'line': {'color': "white", 'width': 4},
+            'value': rsi_val #showing where the RSi sits
+        }
+    }
+    )
+)
+            #matching the guage background and font to the rest of our dashboard
+fig.update_layout(
+    paper_bgcolor="#222",
+    font={'color': "#f5f5f5", 'family': "Courier New"},
+    margin=dict(l=30, r=30, t=50, b=20);
+height=260
+)
+
+return fig
 
 
 #---------------------------------------------------------------------------------------------------------------------------------------
