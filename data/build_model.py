@@ -221,7 +221,20 @@ def build_sequences(dataset, fundamentals_df, sequence_length=60, n_quarters=2):
     fund_cols = fundamentals_df.select_dtypes(include=[np.number]).columns.tolist()
 
     n_fund_features = len(fund_cols)
-    fund_data = fundamentals_df[fund_cols].sort_index() #sort ascending by date
+
+    # Newly-listed or pre-revenue stocks (e.g. OKLO) may have no numeric fundamental
+    # columns, or all-NaN values that break MinMaxScaler.  In either case we fall back
+    # to a single dummy zero feature so the sequence shapes stay consistent downstream.
+    if n_fund_features == 0:
+        n_fund_features = 1
+        fund_cols = ['_no_fundamentals']
+        fund_data = pd.DataFrame(
+            {'_no_fundamentals': [0.0]},
+            index=[dataset.index[0]]
+        )
+    else:
+        # Fill NaN fundamental values with 0 so MinMaxScaler doesn't produce NaN.
+        fund_data = fundamentals_df[fund_cols].sort_index().fillna(0.0)
 
     daily_scaler = MinMaxScaler()
     daily_scaled = daily_scaler.fit_transform(dataset[daily_cols])
@@ -231,15 +244,17 @@ def build_sequences(dataset, fundamentals_df, sequence_length=60, n_quarters=2):
     for i in range(sequence_length, len(dataset)):
         date = dataset.index[i] #get date from stock data
         #get fund records earlier than or equal to this date, sorted ascending
-        past_reports = fund_data[fund_data.index <= date] 
+        past_reports = fund_data[fund_data.index <= date]
         if len(past_reports) == 0:
-            continue #skip for loop if no fund data available before this date
-
-        rows = past_reports.iloc[-n_quarters:].values #get prev 2 records
-        #pad records if less than 2 is there
-        if len(rows) < n_quarters:
-            pad = np.tile(rows[0], (n_quarters - len(rows), 1))
-            rows = np.vstack([pad, rows])
+            # No fundamental report available yet — use zeros rather than skipping
+            # so the sequence is still used for training.
+            rows = np.zeros((n_quarters, n_fund_features), dtype=np.float32)
+        else:
+            rows = past_reports.iloc[-n_quarters:].values #get prev 2 records
+            #pad records if less than 2 is there
+            if len(rows) < n_quarters:
+                pad = np.tile(rows[0], (n_quarters - len(rows), 1))
+                rows = np.vstack([pad, rows])
 
         X_daily_list.append(daily_scaled[i - sequence_length:i])
         X_fund_raw.append(rows)                         # (n_quarters, n_fund_features)
@@ -397,7 +412,7 @@ def train_and_predict_future_period(
 
     avail_fund_cols = [c for c in fund_cols if c in fundamentals_df.columns]
     n_fund_features = len(avail_fund_cols)
-    fund_data = fundamentals_df[avail_fund_cols].sort_index()
+    fund_data = fundamentals_df[avail_fund_cols].sort_index().fillna(0.0) if n_fund_features > 0 else pd.DataFrame()
     n_daily_features = X_daily.shape[2]
 
     #get most recent x records
