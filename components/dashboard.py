@@ -12,8 +12,8 @@ sys.path.append(str(pathlib.Path(__file__).parent.parent))
 from data import build_model as bm
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 from sklearn.metrics import r2_score
-from tensorflow.keras.models import Model  # type: ignore
-from tensorflow.keras.layers import Input as KInput, Dense, LSTM, Dropout, Concatenate  # type: ignore
+# from tensorflow.keras.models import Model  # type: ignore
+# from tensorflow.keras.layers import Input as KInput, Dense, LSTM, Dropout, Concatenate  # type: ignore
 
 #Constants / paths
 
@@ -418,11 +418,19 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         #         accuracy_children = html.Div([...])
         # --- END BACKTEST BLOCK ---
 
-        #get actual prediction
+        # Build and validate a fresh XGBoost model for every request (no cache).
         full_X_daily, full_X_fund, full_y, _full_dates, full_daily_scaler, full_fund_scaler = bm.build_sequences(
             dataset, fundamentals_df, sequence_length=60, n_quarters=4
         )
         full_model = bm.configure_model(60, full_X_daily.shape[2], 4, full_X_fund.shape[2])
+        validation_metrics = bm.train_test_validate_model(
+            full_model,
+            full_X_daily,
+            full_X_fund,
+            full_y,
+            test_size=0.2,
+        )
+
         graph_forecast = bm.train_and_predict_future_period(
             model=full_model,
             X_daily=full_X_daily,
@@ -436,23 +444,28 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
             n_quarters=4,
             future_start_date=str(start_dt),
             future_end_date=str(end_dt),
-            epochs=150,
+            epochs=0,
             batch_size=32,
         )
 
-        # --- Ask the model to self-report its error metrics via evaluate() ---
-        # model.evaluate() returns [mse_loss, mae] in scaled space.
-        # Because MinMaxScaler is linear, multiply by scale_range to get dollar values.
-        # R² = 1 - MSE/Var(y) — equivalent to sklearn's r2_score, no extra predict() needed.
-        eval_results = full_model.evaluate([full_X_daily, full_X_fund], full_y, verbose=0)
-        mse_scaled = float(eval_results[0])
-        mae_scaled = float(eval_results[1])
+        # XGBoost validation metrics come from holdout test split (scaled space).
+        mse_scaled = float(validation_metrics["mse"])
+        mae_scaled = float(validation_metrics["mae"])
 
         scale_range = full_daily_scaler.data_max_[3] - full_daily_scaler.data_min_[3]
         rmse    = float(np.sqrt(mse_scaled)) * scale_range
         mae_val = mae_scaled * scale_range
-        y_var   = float(np.var(full_y))
-        r2      = float(1 - mse_scaled / y_var) if y_var > 0 else 0.0
+        r2      = float(validation_metrics["r2"])
+
+        # --- OLD TensorFlow evaluate() approach (kept for reference) ---
+        # eval_results = full_model.evaluate([full_X_daily, full_X_fund], full_y, verbose=0)
+        # mse_scaled = float(eval_results[0])
+        # mae_scaled = float(eval_results[1])
+        # scale_range = full_daily_scaler.data_max_[3] - full_daily_scaler.data_min_[3]
+        # rmse    = float(np.sqrt(mse_scaled)) * scale_range
+        # mae_val = mae_scaled * scale_range
+        # y_var   = float(np.var(full_y))
+        # r2      = float(1 - mse_scaled / y_var) if y_var > 0 else 0.0
 
         # --- OLD accuracy approach (manual predict + sklearn) — kept for reference ---
         # train_pred_scaled = full_model.predict([full_X_daily, full_X_fund], verbose=0).flatten()
@@ -471,7 +484,7 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
                 html.Div([html.Div("R²", className="label"), html.Div(f"{r2:.4f}", className="value")], className="metric-mini"),
                 html.Div([html.Div("RMSE ($)", className="label"), html.Div(f"${rmse:.2f}", className="value")], className="metric-mini"),
                 html.Div([html.Div("MAE ($)", className="label"), html.Div(f"${mae_val:.2f}", className="value")], className="metric-mini"),
-                html.Div([html.Div("Reported by model via evaluate() on training data.", className="label")], className="metric-mini"),
+                html.Div([html.Div("Reported on holdout test split (20%) using XGBoost.", className="label")], className="metric-mini"),
                 html.Div([html.Div("Predicted prices get more inaccurate as the forecast horizon increases.", className="label")], className="metric-mini"),
             ], className="metric-row"),
         ])

@@ -5,9 +5,10 @@ import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
 import matplotlib.pyplot as plt
-from tensorflow.keras.models import Model  # type: ignore
-from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate  # type: ignore
-from tensorflow.keras.callbacks import EarlyStopping  # type: ignore
+# from tensorflow.keras.models import Model  # type: ignore
+# from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate  # type: ignore
+# from tensorflow.keras.callbacks import EarlyStopping  # type: ignore
+from xgboost import XGBRegressor
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -85,25 +86,33 @@ price_cols = [
 ]
 
 def get_market_sentiment(start, end):
+    # Download all tickers in parallel to cut 3 sequential network calls down to 1 round-trip
+    from concurrent.futures import ThreadPoolExecutor
+
+    tickers = {"VIX": "^VIX", "SP500": "^GSPC", "TNX": "^TNX"}
+
+    def _fetch(symbol):
+        s = yf.download(symbol, start=start, end=end, progress=False)['Close'].squeeze()
+        s.index = s.index.tz_localize(None)
+        return s
+
+    with ThreadPoolExecutor(max_workers=len(tickers)) as pool:
+        futures = {name: pool.submit(_fetch, sym) for name, sym in tickers.items()}
+        results = {name: f.result() for name, f in futures.items()}
+
+    vix      = results["VIX"]
+    sp500    = results["SP500"]
+    treasury = results["TNX"]
+
     sentiment = pd.DataFrame()
-    vix = yf.download("^VIX", start=start, end=end)['Close'].squeeze()
-    vix.index = vix.index.tz_localize(None)  # strip timezone
     sentiment['VIX'] = vix
     sentiment['VIX_MA20'] = vix.rolling(20).mean()
-    sp500 = yf.download("^GSPC", start=start, end=end)['Close'].squeeze()
-    sp500.index = sp500.index.tz_localize(None)  # strip timezone
     sentiment['SP500'] = sp500
     sentiment['SP500_Return'] = sp500.pct_change()
     sentiment['SP500_MA50'] = sp500.rolling(50).mean()
-    treasury = yf.download("^TNX", start=start, end=end)['Close'].squeeze()
-    treasury.index = treasury.index.tz_localize(None)
     sentiment['Treasury_10Y'] = treasury
     sentiment['Yield_Change'] = treasury.pct_change()
-    sp500_aligned = sentiment['SP500']
-    ma50_aligned = sentiment['SP500_MA50']
-    sentiment['Market_Regime'] = np.where(
-        sp500_aligned > ma50_aligned, 1, 0
-    )
+    sentiment['Market_Regime'] = np.where(sentiment['SP500'] > sentiment['SP500_MA50'], 1, 0)
     return sentiment
 
 sentiment_cols = [
@@ -259,28 +268,80 @@ def split_by_test_period(X_daily, X_fund, y, sequence_dates, test_start_date=Non
         sequence_dates[test_mask]
     )
 
+
+def flatten_sequence_features(X_daily, X_fund):
+    """Flatten 3D sequence inputs into a 2D tabular matrix for XGBoost."""
+    if len(X_daily) == 0 or len(X_fund) == 0:
+        return np.empty((0, 0), dtype=np.float32)
+    X_daily_flat = X_daily.reshape(X_daily.shape[0], -1)
+    X_fund_flat = X_fund.reshape(X_fund.shape[0], -1)
+    return np.hstack([X_daily_flat, X_fund_flat]).astype(np.float32)
+
+
 def configure_model(
     sequence_length,
     n_daily_features,
     n_quarters,
     n_fundamental_features
 ):
-    daily_input = Input(shape=(sequence_length, n_daily_features))
-    lstm_out = LSTM(128, return_sequences=True)(daily_input)
-    lstm_out = Dropout(0.2)(lstm_out) #avoid overfitting by randomly dropping 20% of the connections between LSTM layers during training
-    lstm_out = LSTM(64)(lstm_out)
+    # OLD TENSORFLOW LSTM MODEL (kept for reference):
+    # daily_input = Input(shape=(sequence_length, n_daily_features))
+    # lstm_out = LSTM(128, return_sequences=True)(daily_input)
+    # lstm_out = Dropout(0.2)(lstm_out)
+    # lstm_out = LSTM(64)(lstm_out)
+    #
+    # fund_input = Input(shape=(n_quarters, n_fundamental_features))
+    # fund_out = LSTM(32)(fund_input)
+    #
+    # combined = Concatenate()([lstm_out, fund_out])
+    # combined = Dense(32, activation='relu')(combined)
+    # output = Dense(1)(combined)
+    #
+    # model = Model(inputs=[daily_input, fund_input], outputs=output)
+    # model.compile(optimizer='adam', loss='mse', metrics=['mae'])
+    # return model
 
-    fund_input = Input(shape=(n_quarters, n_fundamental_features))  # 4 quarters x fund features
-    fund_out = LSTM(32)(fund_input)
+    # XGBoost regressor over flattened sequence features
+    return XGBRegressor(
+        n_estimators=500,
+        learning_rate=0.03,
+        max_depth=6,
+        subsample=0.9,
+        colsample_bytree=0.9,
+        objective='reg:squarederror',
+        random_state=42,
+        n_jobs=-1,
+    )
 
-    combined = Concatenate()([lstm_out, fund_out])
-    combined = Dense(32, activation='relu')(combined)
-    output = Dense(1)(combined)  # predicted price
 
-    model = Model(inputs=[daily_input, fund_input], outputs=output)
-    model.compile(optimizer='adam', loss='mse', metrics=['mae'])
-    
-    return model
+def train_test_validate_model(model, X_daily, X_fund, y, test_size=0.2, random_state=42):
+    """Train/test validation for the XGBoost model on flattened features."""
+    X = flatten_sequence_features(X_daily, X_fund)
+    if len(X) < 20:
+        raise ValueError("Not enough samples to run train/test validation")
+    #below keeps chronological split instead of random split to avoid data leakage in time series context
+    split_idx = int(len(X) * (1 - test_size))
+    split_idx = max(1, min(split_idx, len(X) - 1))
+
+    X_train, X_test = X[:split_idx], X[split_idx:]
+    y_train, y_test = y[:split_idx], y[split_idx:]
+
+    model.fit(X_train, y_train)
+    y_pred = model.predict(X_test)
+
+    mse = float(mean_squared_error(y_test, y_pred))
+    mae = float(mean_absolute_error(y_test, y_pred))
+    y_var = float(np.var(y_test))
+    r2 = float(1 - mse / y_var) if y_var > 0 else 0.0
+
+    return {
+        "mse": mse,
+        "mae": mae,
+        "rmse": float(np.sqrt(mse)),
+        "r2": r2,
+        "n_train": int(len(X_train)),
+        "n_test": int(len(X_test)),
+    }
 
 def train_and_predict_future_period(
     model,
@@ -302,9 +363,10 @@ def train_and_predict_future_period(
     future_start = pd.to_datetime(future_start_date)
     future_end = pd.to_datetime(future_end_date)
     
-    #train model — stop early once loss stops improving to avoid under-training
-    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True, verbose=0)
-    model.fit([X_daily, X_fund], y, epochs=epochs, batch_size=batch_size, verbose=0, callbacks=[early_stop])
+    # OLD TENSORFLOW TRAINING BLOCK (kept for reference):
+    # if epochs > 0:
+    #     early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True, verbose=0)
+    #     model.fit([X_daily, X_fund], y, epochs=epochs, batch_size=batch_size, verbose=0, callbacks=[early_stop])
 
     #get dates in date range
     future_dates = pd.bdate_range(start=future_start, end=future_end)
@@ -320,41 +382,108 @@ def train_and_predict_future_period(
     last_daily_seq = X_daily[-1].copy()   
     last_fund_window = X_fund[-1].copy()  
 
-    # Seed a running buffer of scaled Close values with the last training window.
-    # Used to keep MA_20, MA_50, MA_200 consistent with predicted closes so the
-    # model doesn't see a diverging Close vs frozen MAs (which caused the sharp drop).
-    # Column indices follow price_cols order: Close=3, MA_20=7, MA_50=8, MA_200=9
-    close_buffer = list(last_daily_seq[:, 3])  # shape (sequence_length,)
+    # Seed a raw (unscaled) close buffer from the last historical window.
+    # We keep raw prices so momentum/volatility features can be recomputed
+    # in original dollar space, then re-scaled per feature.
+    # price_cols indices: Close=3, Daily_Return=5, Log_Return=6,
+    #   MA_20=7, MA_50=8, MA_200=9, Volatility_20=10,
+    #   RSI=13, MACD=14, MACD_Signal=15, BB_Upper=16, BB_Lower=17, BB_Width=18
+
+    #unscale values in a column back to original price space using the MinMaxScaler parameters
+    #so user can understand
+    def scale_col(val, col):
+        mn = daily_scaler.data_min_[col]
+        mx = daily_scaler.data_max_[col]
+        if mx == mn:
+            return 0.0
+        return float(np.clip((val - mn) / (mx - mn), 0.0, 1.0))
+
+    # Inverse-transform the stored scaled close values to get raw prices
+    raw_close_buffer = []
+    for sc in last_daily_seq[:, 3]:
+        dummy = np.zeros((1, n_daily_features))
+        dummy[0, 3] = sc
+        raw_close_buffer.append(float(daily_scaler.inverse_transform(dummy)[0, 3])) #store scaled close price of recent rec
+
+    # scaled close buffer for the MA recomputation 
+    close_buffer = list(last_daily_seq[:, 3])# get all rows from col 3
 
     predictions = []
 
     #Iteratively predict each future day, then update the input sequences with the new prediction and any new fund data that becomes available
     for forecast_date in future_dates:
-        pred_scaled = model.predict(
-            [last_daily_seq.reshape(1, sequence_length, n_daily_features),
-             last_fund_window.reshape(1, n_quarters, n_fund_features)],
-            verbose=0
-        )[0, 0] #sample, output
+        feature_row = np.hstack([
+            #turn rows into 1d array by flattening the sequence, then concatenate daily and fund features
+            last_daily_seq.reshape(1, -1),
+            last_fund_window.reshape(1, -1)
+        ]).astype(np.float32)
+        pred_scaled = float(model.predict(feature_row)[0])
 
         row_for_inverse = np.zeros((1, n_daily_features)) #dummy row with all zeros
         row_for_inverse[0, 3] = pred_scaled #add prediction
         pred_close = daily_scaler.inverse_transform(row_for_inverse)[0, 3] #unscale to get actual price
+        #build predictions
         predictions.append((forecast_date, pred_close))
 
+        #add prediction to buffers for next iteration's feature recomputation
+        raw_close_buffer.append(float(pred_close))
         close_buffer.append(float(pred_scaled))
+        #store close prices in raw price space for accurate feature recomputation
+        # # also keep scaled close values in buffer for moving average calculations that feed into the model features
 
-        next_row = last_daily_seq[-1].copy()
+        closes = np.array(raw_close_buffer, dtype=np.float64)
+
+        next_row = last_daily_seq[-1].copy() #use the latest row we have to build prev row for predictions
         next_row[3] = pred_scaled  # update Close
 
-        # Recompute MA features in scaled space so the LSTM doesn't see a stale MA
-        # diverging from the predicted Close (MinMaxScaler is linear, so
-        # mean(scaled_x) == scaled(mean(x)) — the approximation is exact).
+        # MA_20, MA_50, MA_200 
         if n_daily_features > 7:
-            next_row[7] = float(np.mean(close_buffer[-20:]))   # MA_20
+            next_row[7] = float(np.mean(close_buffer[-20:]))
         if n_daily_features > 8:
-            next_row[8] = float(np.mean(close_buffer[-50:]))   # MA_50
+            next_row[8] = float(np.mean(close_buffer[-50:]))
         if n_daily_features > 9:
-            next_row[9] = float(np.mean(close_buffer[-200:]))  # MA_200
+            next_row[9] = float(np.mean(close_buffer[-200:]))
+
+        #Daily_Return and Log_Return
+        if n_daily_features > 5 and len(closes) >= 2 and closes[-2] > 0:
+            dr = (closes[-1] - closes[-2]) / closes[-2]
+            lr = float(np.log(closes[-1] / closes[-2]))
+            next_row[5] = scale_col(dr, 5)
+            if n_daily_features > 6:
+                next_row[6] = scale_col(lr, 6)
+
+        # Volatility_20 
+        if n_daily_features > 10 and len(closes) >= 21:
+            rets = np.diff(closes[-21:]) / closes[-21:-1]
+            next_row[10] = scale_col(float(np.std(rets)), 10)
+
+        # RSI
+        if n_daily_features > 13 and len(closes) >= 15:
+            deltas = np.diff(closes[-15:]) #get prev 15 closes
+            gains = float(np.mean(np.where(deltas > 0, deltas, 0.0)))
+            losses = float(np.mean(np.where(deltas < 0, -deltas, 0.0)))
+            rsi_val = 100.0 - (100.0 / (1.0 + gains / losses)) if losses > 0 else 100.0
+            next_row[13] = scale_col(rsi_val, 13)
+
+        # MACD and Signal line 
+        if n_daily_features > 15 and len(closes) >= 26:
+            cs = pd.Series(closes)
+            ema12 = cs.ewm(span=12, adjust=False).mean()
+            ema26 = cs.ewm(span=26, adjust=False).mean()
+            macd_series = ema12 - ema26
+            signal_series = macd_series.ewm(span=9, adjust=False).mean()
+            next_row[14] = scale_col(float(macd_series.iloc[-1]), 14)
+            next_row[15] = scale_col(float(signal_series.iloc[-1]), 15)
+
+        # Bollinger Bands — 20-day MA ± 2σ
+        if n_daily_features > 18 and len(closes) >= 20:
+            ma20_raw = float(np.mean(closes[-20:]))
+            std20_raw = float(np.std(closes[-20:]))
+            bb_upper = ma20_raw + 2 * std20_raw
+            bb_lower = ma20_raw - 2 * std20_raw
+            next_row[16] = scale_col(bb_upper, 16)
+            next_row[17] = scale_col(bb_lower, 17)
+            next_row[18] = scale_col(bb_upper - bb_lower, 18)
 
         last_daily_seq = np.vstack([last_daily_seq[1:], next_row]) #add new row and remove oldest row to maintain sequence length
 
