@@ -21,13 +21,22 @@ future_pred_end_date = "2026-07-31"
 
 
 def ticker_exists(ticker):
+    t = yf.Ticker(ticker)
+
+    # Yahoo metadata calls are less reliable in hosted environments.
+    # Treat them as an optional fast path and fall back to recent price history.
     try:
-        t = yf.Ticker(ticker)
-        info = t.info
-        if info and info.get('regularMarketPrice') is not None:
-            return True
-        hist = t.history(period="5d")
-        return len(hist) > 0
+        fast_info = getattr(t, "fast_info", None)
+        if fast_info:
+            last_price = fast_info.get("lastPrice")
+            if last_price is not None:
+                return True
+    except Exception:
+        pass
+
+    try:
+        hist = t.history(period="5d", auto_adjust=False)
+        return hist is not None and len(hist) > 0
     except Exception:
         return False
     
