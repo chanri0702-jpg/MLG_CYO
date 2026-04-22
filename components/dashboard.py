@@ -268,7 +268,6 @@ app.layout = html.Div(
                         html.Div([
                             dcc.Checklist(
                                 options=[
-                                    {"label": "Include Company Fundamentals", "value": "fundamentals"},
                                     {"label": "Include Market Sentiment", "value": "sentiment"},
                                     {"label": "View Current Fundamentals", "value": "curr_fundamentals"},
                                     {"label": "View Current Market Sentiment", "value": "curr_sentiment"},
@@ -417,7 +416,6 @@ app.layout = html.Div(
 )
 def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
     checklist_values = checklist_values or []
-    inc_fund = "fundamentals" in checklist_values
     inc_sent = "sentiment" in checklist_values
     view_fund = "curr_fundamentals" in checklist_values
     view_sent = "curr_sentiment" in checklist_values
@@ -712,7 +710,7 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
 
     # --- Current fundamentals: derived from fundamentals_df already fetched by build_full_dataset ---
     fund_children = None
-    if view_fund or inc_fund:
+    if view_fund:
         if not fundamentals_df.empty:
             latest_fund = fundamentals_df.iloc[-1]
             display_cols = [
