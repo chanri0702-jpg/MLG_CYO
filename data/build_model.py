@@ -12,7 +12,8 @@ from xgboost import XGBRegressor
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
-
+# Download all tickers in parallel to cut 3 sequential network calls down to 1 round-trip
+from concurrent.futures import ThreadPoolExecutor
 
 test_period_days = 180
 test_start_date = None
@@ -109,8 +110,7 @@ price_cols = [
 ]
 
 def get_market_sentiment(start, end):
-    # Download all tickers in parallel to cut 3 sequential network calls down to 1 round-trip
-    from concurrent.futures import ThreadPoolExecutor
+    
 
     tickers = {"VIX": "^VIX", "SP500": "^GSPC", "TNX": "^TNX"}
 
@@ -193,6 +193,7 @@ def build_full_dataset(ticker, start, end):
     fundamentals_df.index = pd.to_datetime(fundamentals_df.index.date)  # date only, no time
 
     dataset = pd.concat([price_data, sentiment], axis=1)
+    dataset = dataset.replace([np.inf, -np.inf], np.nan)
     dataset = dataset.dropna()
     dataset = dataset.drop_duplicates()
 
@@ -222,7 +223,7 @@ def build_sequences(dataset, fundamentals_df, sequence_length=60, n_quarters=2):
 
     n_fund_features = len(fund_cols)
 
-    # Newly-listed or pre-revenue stocks (e.g. OKLO) may have no numeric fundamental
+    # Newly-listed or pre-revenue stocks may have no numeric fundamental
     # columns, or all-NaN values that break MinMaxScaler.  In either case we fall back
     # to a single dummy zero feature so the sequence shapes stay consistent downstream.
     if n_fund_features == 0:
@@ -233,8 +234,13 @@ def build_sequences(dataset, fundamentals_df, sequence_length=60, n_quarters=2):
             index=[dataset.index[0]]
         )
     else:
-        # Fill NaN fundamental values with 0 so MinMaxScaler doesn't produce NaN.
-        fund_data = fundamentals_df[fund_cols].sort_index().fillna(0.0)
+        # Replace inf and NaN with 0 so MinMaxScaler doesn't fail.
+        fund_data = (
+            fundamentals_df[fund_cols]
+            .sort_index()
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+        )
 
     daily_scaler = MinMaxScaler()
     daily_scaled = daily_scaler.fit_transform(dataset[daily_cols])
@@ -247,7 +253,6 @@ def build_sequences(dataset, fundamentals_df, sequence_length=60, n_quarters=2):
         past_reports = fund_data[fund_data.index <= date]
         if len(past_reports) == 0:
             # No fundamental report available yet — use zeros rather than skipping
-            # so the sequence is still used for training.
             rows = np.zeros((n_quarters, n_fund_features), dtype=np.float32)
         else:
             rows = past_reports.iloc[-n_quarters:].values #get prev 2 records
@@ -412,7 +417,15 @@ def train_and_predict_future_period(
 
     avail_fund_cols = [c for c in fund_cols if c in fundamentals_df.columns]
     n_fund_features = len(avail_fund_cols)
-    fund_data = fundamentals_df[avail_fund_cols].sort_index().fillna(0.0) if n_fund_features > 0 else pd.DataFrame()
+    if n_fund_features > 0:
+        fund_data = (
+            fundamentals_df[avail_fund_cols]
+            .sort_index()
+            .replace([np.inf, -np.inf], np.nan)
+            .fillna(0.0)
+        )
+    else:
+        fund_data = pd.DataFrame()
     n_daily_features = X_daily.shape[2]
 
     #get most recent x records
