@@ -4,7 +4,6 @@ import sys
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
-import matplotlib.pyplot as plt
 # from tensorflow.keras.models import Model  # type: ignore
 # from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate  # type: ignore
 # from tensorflow.keras.callbacks import EarlyStopping  # type: ignore
