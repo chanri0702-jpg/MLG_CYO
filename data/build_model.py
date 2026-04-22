@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from tensorflow.keras.models import Model  # type: ignore
 from tensorflow.keras.layers import Input, Dense, LSTM, Dropout, Concatenate  # type: ignore
+from tensorflow.keras.callbacks import EarlyStopping  # type: ignore
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, mean_absolute_error
@@ -98,14 +99,6 @@ def get_market_sentiment(start, end):
     treasury.index = treasury.index.tz_localize(None)
     sentiment['Treasury_10Y'] = treasury
     sentiment['Yield_Change'] = treasury.pct_change()
-    gold = yf.download("GC=F", start=start, end=end)['Close'].squeeze()
-    gold.index = gold.index.tz_localize(None)
-    sentiment['Gold_Price'] = gold
-    sentiment['Gold_Return'] = gold.pct_change()
-    dxy = yf.download("DX-Y.NYB", start=start, end=end)['Close'].squeeze()
-    dxy.index = dxy.index.tz_localize(None)
-    sentiment['DXY'] = dxy
-    sentiment['DXY_Return'] = dxy.pct_change()
     sp500_aligned = sentiment['SP500']
     ma50_aligned = sentiment['SP500_MA50']
     sentiment['Market_Regime'] = np.where(
@@ -117,8 +110,6 @@ sentiment_cols = [
     'VIX', 'VIX_MA20',
     'SP500', 'SP500_Return', 'SP500_MA50',
     'Treasury_10Y', 'Yield_Change',
-    'Gold_Price', 'Gold_Return',
-    'DXY', 'DXY_Return',
     'Market_Regime'
 ]
 
@@ -304,15 +295,16 @@ def train_and_predict_future_period(
     n_quarters,
     future_start_date,
     future_end_date,
-    epochs=50,
+    epochs=150,
     batch_size=32
 ):
 
     future_start = pd.to_datetime(future_start_date)
     future_end = pd.to_datetime(future_end_date)
     
-    #train model
-    model.fit([X_daily, X_fund], y, epochs=epochs, batch_size=batch_size, verbose=0)
+    #train model — stop early once loss stops improving to avoid under-training
+    early_stop = EarlyStopping(monitor='loss', patience=10, restore_best_weights=True, verbose=0)
+    model.fit([X_daily, X_fund], y, epochs=epochs, batch_size=batch_size, verbose=0, callbacks=[early_stop])
 
     #get dates in date range
     future_dates = pd.bdate_range(start=future_start, end=future_end)
@@ -327,6 +319,12 @@ def train_and_predict_future_period(
     #get most recent x records
     last_daily_seq = X_daily[-1].copy()   
     last_fund_window = X_fund[-1].copy()  
+
+    # Seed a running buffer of scaled Close values with the last training window.
+    # Used to keep MA_20, MA_50, MA_200 consistent with predicted closes so the
+    # model doesn't see a diverging Close vs frozen MAs (which caused the sharp drop).
+    # Column indices follow price_cols order: Close=3, MA_20=7, MA_50=8, MA_200=9
+    close_buffer = list(last_daily_seq[:, 3])  # shape (sequence_length,)
 
     predictions = []
 
@@ -343,8 +341,21 @@ def train_and_predict_future_period(
         pred_close = daily_scaler.inverse_transform(row_for_inverse)[0, 3] #unscale to get actual price
         predictions.append((forecast_date, pred_close))
 
+        close_buffer.append(float(pred_scaled))
+
         next_row = last_daily_seq[-1].copy()
-        next_row[3] = pred_scaled #get output column (Close) to be the predicted value, keep other features as last known values
+        next_row[3] = pred_scaled  # update Close
+
+        # Recompute MA features in scaled space so the LSTM doesn't see a stale MA
+        # diverging from the predicted Close (MinMaxScaler is linear, so
+        # mean(scaled_x) == scaled(mean(x)) — the approximation is exact).
+        if n_daily_features > 7:
+            next_row[7] = float(np.mean(close_buffer[-20:]))   # MA_20
+        if n_daily_features > 8:
+            next_row[8] = float(np.mean(close_buffer[-50:]))   # MA_50
+        if n_daily_features > 9:
+            next_row[9] = float(np.mean(close_buffer[-200:]))  # MA_200
+
         last_daily_seq = np.vstack([last_daily_seq[1:], next_row]) #add new row and remove oldest row to maintain sequence length
 
         past_reports = fund_data[fund_data.index <= forecast_date]

@@ -31,94 +31,92 @@ DROPDOWN_STYLE = {
 
 #-----------------------------------------------------------ADD CHARTS------------------------------------------------------------------
 #Price Prediction Chart:
-def _build_price_figure(ticker: str, df_full: pd.DataFrame) ->go.Figure:
-     """Build a Plotly figure from the combined historical + predicted DataFrame."""
+def _build_price_figure(ticker: str, df_full: pd.DataFrame) -> go.Figure:
+    """Build a Plotly figure from the combined historical + predicted DataFrame."""
     fig = go.Figure()
 
-#Filtering the data into 2 groups: the past data as well as the future predictions
-hist_df = df_full[df_full["type"] == "historical"]
-pred_df = df_full[df_full["type"] == "predicted"]
+    #Filtering the data into 2 groups: the past data as well as the future predictions
+    hist_df = df_full[df_full["type"] == "historical"]
+    pred_df = df_full[df_full["type"] == "predicted"]
 
-#adding a line to represent the actual historical stick prices
-fig.add_trace(go.Scatter(
-    x=hist_df["date"],
-    y=hist_df["close"],
-    name="Historical",
-    line=dict(color="#36854a", width=2.5)
-))
-#adding in a dotted line for the predicted prices
-if not pred_df.empty:
-    #getting the last real price to attach the prediction line to
-    last_hist = hist_df.iloc[-1:]
-    conn_pred = pd.concat([last_hist, pred_df], ignore_index=True)
+    #adding a line to represent the actual historical stick prices
     fig.add_trace(go.Scatter(
-        x=conn_pred["date"],
-        y=conn_pred["close"],
-        name="Predicted",
-        line=dict(color="#cf3e3e", width=2, dash="dot")
+        x=hist_df["date"],
+        y=hist_df["close"],
+        name="Historical",
+        line=dict(color="#36854a", width=2.5)
     ))
+    #adding in a dotted line for the predicted prices
+    if not pred_df.empty:
+        #getting the last real price to attach the prediction line to
+        last_hist = hist_df.iloc[-1:]
+        conn_pred = pd.concat([last_hist, pred_df], ignore_index=True)
+        fig.add_trace(go.Scatter(
+            x=conn_pred["date"],
+            y=conn_pred["close"],
+            name="Predicted",
+            line=dict(color="#cf3e3e", width=2, dash="dot")
+        ))
 
-#refining the display of the graph
-fig.update_layout(
-    title=f"Price Forecast: {ticker}",
-    templates="plotly_dark",
-    paper_bgcolor="#222",
-    plot_bgcolor="#222",
-    font=dict(family="Courier New", color="#f5f5f5"),
-    xaxis=dict(showgrid=False, title="Date"),
-    yaxis=dict(showgrid=True, gridcolor="#333", title="Price ($)"),
-    margin=dict(l=10, r=10, t=50, b=10),
-    hovermode="x unified"
-)
-return fig
+    #refining the display of the graph
+    fig.update_layout(
+        title=f"Price Forecast: {ticker}",
+        template="plotly_dark",
+        paper_bgcolor="#222",
+        plot_bgcolor="#222",
+        font=dict(family="Courier New", color="#f5f5f5"),
+        xaxis=dict(showgrid=False, title="Date"),
+        yaxis=dict(showgrid=True, gridcolor="#333", title="Price ($)"),
+        margin=dict(l=10, r=10, t=50, b=10),
+        hovermode="x unified",
+    )
+    return fig
 
 #Sentiment Gauge Chart
-def_build_sentiment_figure(sentiment: dict, ticker: str) ->go.Figure:
-"""Gauge chart for RSI-based sentiment."""
-#we are extracting the RSI value and the calculated signal from the data
-rsi_val = sentiment.get("RSI (14)", 50)
-signal = sentiment.get("Signal", "Neutral")
+def _build_sentiment_figure(sentiment: dict, ticker: str) -> go.Figure:
+    """Gauge chart for RSI-based sentiment."""
+    #we are extracting the RSI value and the calculated signal from the data
+    rsi_val = sentiment.get("RSI (14)", 50)
+    signal = sentiment.get("Signal", "Neutral")
 
-#the logic in order to change the guage color
-#green: bullish (price going up)
-#red: bearish (price going down)
-#yellow: neutral
-color = "#ffb300"
-if signal == "Bullish":
-    color="#00c853"
-elif signal == "Bearish":
-    color="#ff5252"
+    #the logic in order to change the guage color
+    #green: bullish (price going up)
+    #red: bearish (price going down)
+    #yellow: neutral
+    color = "#ffb300"
+    if signal == "Bullish":
+        color = "#00c853"
+    elif signal == "Bearish":
+        color = "#ff5252"
 
-#setting up the gauge/indiator component
-fig = go.Figure(go.Indicator(
-    mode="gauge+number",
-    value=rsi_val,
-    title={'text': f"RSI Indicator ({signal})", 'font' : {'size':14}},
-    number={'font': {'color': color}}
-    gauge={
-        'axis': {'range': [0, 100]},
-        'bar': {'color': color},
-        'bgcolor': "#222",
-        'steps':[
-            {'range':[0.30], 'color': 'rgba(255, 82, 82, 0.1)'},
-            {'range': [70,100], 'color': 'rgba(0, 200, 83, 0.1)'}
-        ],
-        'threshold': {
-            'line': {'color': "white", 'width': 4},
-            'value': rsi_val #showing where the RSi sits
-        }
-    }
+    #setting up the gauge/indicator component
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=rsi_val,
+        title={'text': f"RSI Indicator ({signal})", 'font': {'size': 14}},
+        number={'font': {'color': color}},
+        gauge={
+            'axis': {'range': [0, 100]},
+            'bar': {'color': color},
+            'bgcolor': "#222",
+            'steps': [
+                {'range': [0, 30], 'color': 'rgba(255, 82, 82, 0.1)'},
+                {'range': [70, 100], 'color': 'rgba(0, 200, 83, 0.1)'},
+            ],
+            'threshold': {
+                'line': {'color': "white", 'width': 4},
+                'value': rsi_val,
+            },
+        },
+    ))
+    #matching the gauge background and font to the rest of our dashboard
+    fig.update_layout(
+        paper_bgcolor="#222",
+        font={'color': "#f5f5f5", 'family': "Courier New"},
+        margin=dict(l=30, r=30, t=50, b=20),
+        height=260,
     )
-)
-            #matching the guage background and font to the rest of our dashboard
-fig.update_layout(
-    paper_bgcolor="#222",
-    font={'color': "#f5f5f5", 'family': "Courier New"},
-    margin=dict(l=30, r=30, t=50, b=20);
-height=260
-)
-
-return fig
+    return fig
 
 
 #---------------------------------------------------------------------------------------------------------------------------------------
@@ -352,13 +350,10 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
         backtest_start = earliest_actual_date
 
     # --- Select historical price window to display ---
-    if start_dt <= today:
-        # Show only the user's requested historical window
-        hist_mask = (price_data.index >= pd.to_datetime(start_dt)) & (price_data.index <= pd.to_datetime(today))
-    else:
-        # Start is in the future — show last 60 days as context
-        context_start = today - datetime.timedelta(days=60)
-        hist_mask = price_data.index >= pd.to_datetime(context_start)
+    # Always show 0 days of context ending at today (or at forecast start if it's in the past)
+    context_anchor = min(start_dt, today)
+    context_start = context_anchor - datetime.timedelta(days=90)
+    hist_mask = (price_data.index >= pd.to_datetime(context_start)) & (price_data.index <= pd.to_datetime(today))
     price_display = price_data[hist_mask] if hist_mask.any() else price_data
 
     hist_chart = price_display[["Close"]].rename(columns={"Close": "close"}).copy()
@@ -367,77 +362,62 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
     hist_chart["type"] = "historical"
 
     # --- ML pipeline: recent-window backtest for accuracy, then full-data forecast for the chart ---
+    # fund_cols defined here so it's available to both the backtest and full-model blocks
+    fund_cols = fundamentals_df.select_dtypes(include=[np.number]).columns.tolist()
+
     backtest_forecast = None
     graph_forecast = None
     accuracy_children = None
 
     try:
-        train_cutoff = pd.to_datetime(backtest_start) - pd.Timedelta(days=1)
-        train_dataset = dataset[dataset.index <= train_cutoff]
-        if len(train_dataset) < 90:
-            raise ValueError("Not enough pre-period history to train the model for this test window")
+        # --- BACKTEST BLOCK COMMENTED OUT (trains a second model; too slow) ---
+        # train_cutoff = pd.to_datetime(backtest_start) - pd.Timedelta(days=1)
+        # train_dataset = dataset[dataset.index <= train_cutoff]
+        # if len(train_dataset) < 90:
+        #     raise ValueError("Not enough pre-period history to train the model for this test window")
+        #
+        # X_daily, X_fund, y, sequence_dates, daily_scaler, fund_scaler = bm.build_sequences(
+        #     train_dataset, fundamentals_df, sequence_length=60, n_quarters=4
+        # )
+        # n_daily_features = X_daily.shape[2]
+        # n_fund_features = X_fund.shape[2]
+        # model = bm.configure_model(60, n_daily_features, 4, n_fund_features)
+        #
+        # backtest_forecast = bm.train_and_predict_future_period(
+        #     model=model,
+        #     X_daily=X_daily,
+        #     X_fund=X_fund,
+        #     y=y,
+        #     daily_scaler=daily_scaler,
+        #     fund_scaler=fund_scaler,
+        #     fundamentals_df=fundamentals_df,
+        #     fund_cols=fund_cols,
+        #     sequence_length=60,
+        #     n_quarters=4,
+        #     future_start_date=str(backtest_start),
+        #     future_end_date=str(backtest_end),
+        #     epochs=150,
+        #     batch_size=32,
+        # )
+        #
+        # if backtest_forecast is not None and not backtest_forecast.empty:
+        #     actual_period = price_data[["Close"]].copy().rename(columns={"Close": "Actual_Close"})
+        #     actual_period = actual_period[
+        #         (actual_period.index >= pd.to_datetime(backtest_start))
+        #         & (actual_period.index <= pd.to_datetime(backtest_end))
+        #     ]
+        #     eval_df = backtest_forecast.join(actual_period, how="inner")
+        #     if len(eval_df) > 0:
+        #         pred_vals = eval_df["Predicted_Close"].values.astype(float)
+        #         actual_vals = eval_df["Actual_Close"].values.astype(float)
+        #         rmse = float(np.sqrt(mean_squared_error(actual_vals, pred_vals)))
+        #         mae_val = float(mean_absolute_error(actual_vals, pred_vals))
+        #         ss_res = float(np.sum((actual_vals - pred_vals) ** 2))
+        #         ss_tot = float(np.sum((actual_vals - actual_vals.mean()) ** 2))
+        #         r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+        #         accuracy_children = html.Div([...])
+        # --- END BACKTEST BLOCK ---
 
-        X_daily, X_fund, y, sequence_dates, daily_scaler, fund_scaler = bm.build_sequences(
-            train_dataset, fundamentals_df, sequence_length=60, n_quarters=4
-        )
-
-        n_daily_features = X_daily.shape[2] #get number of features for daily data
-        n_fund_features = X_fund.shape[2] #get number of features for fundamental data
-
-        model = bm.configure_model(60, n_daily_features, 4, n_fund_features)
-
-        fund_cols = fundamentals_df.select_dtypes(include=[np.number]).columns.tolist()
-        backtest_forecast = bm.train_and_predict_future_period(
-            model=model,
-            X_daily=X_daily,
-            X_fund=X_fund,
-            y=y,
-            daily_scaler=daily_scaler,
-            fund_scaler=fund_scaler,
-            fundamentals_df=fundamentals_df,
-            fund_cols=fund_cols,
-            sequence_length=60,
-            n_quarters=4,
-            future_start_date=str(backtest_start),
-            future_end_date=str(backtest_end),
-            epochs=20,
-            batch_size=32,
-        )
-
-        if backtest_forecast is not None and not backtest_forecast.empty:
-            actual_period = price_data[["Close"]].copy().rename(columns={"Close": "Actual_Close"}) #get & rename col
-            actual_period = actual_period[
-                (actual_period.index >= pd.to_datetime(backtest_start))
-                & (actual_period.index <= pd.to_datetime(backtest_end))
-            ] #get columns in test range
-
-            eval_df = backtest_forecast.join(actual_period, how="inner") #join datasets
-
-            if len(eval_df) > 0:
-                pred_vals = eval_df["Predicted_Close"].values.astype(float)
-                actual_vals = eval_df["Actual_Close"].values.astype(float)
-
-                rmse = float(np.sqrt(mean_squared_error(actual_vals, pred_vals)))
-                mae_val = float(mean_absolute_error(actual_vals, pred_vals))
-                ss_res = float(np.sum((actual_vals - pred_vals) ** 2))
-                ss_tot = float(np.sum((actual_vals - actual_vals.mean()) ** 2))
-                r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
-
-                accuracy_children = html.Div([
-                    html.Div([
-                        html.Div([html.Div("R²", className="label"), html.Div(f"{r2:.4f}", className="value")], className="metric-mini"),
-                        html.Div([html.Div("RMSE ($)", className="label"), html.Div(f"${rmse:.2f}", className="value")], className="metric-mini"),
-                        html.Div([html.Div("MAE ($)", className="label"), html.Div(f"${mae_val:.2f}", className="value")], className="metric-mini"),
-                        html.Div([html.Div("Test Window", className="label"), html.Div(f"{backtest_start} to {backtest_end}", className="value")], className="metric-mini"),
-                        html.Div([html.Div("Predicted prices get more inaccurate as the forecast horizon increases.", className="label")], className="metric-mini"),
-                    ], className="metric-row"),
-                ])
-            else:
-                accuracy_children = html.Div(
-                    "No actual closes are available for the selected period yet, so accuracy cannot be computed.",
-                    className="info-card",
-                    style={"color": "#555"},
-                )
         #get actual prediction
         full_X_daily, full_X_fund, full_y, _full_dates, full_daily_scaler, full_fund_scaler = bm.build_sequences(
             dataset, fundamentals_df, sequence_length=60, n_quarters=4
@@ -456,9 +436,45 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
             n_quarters=4,
             future_start_date=str(start_dt),
             future_end_date=str(end_dt),
-            epochs=20,
+            epochs=150,
             batch_size=32,
         )
+
+        # --- Ask the model to self-report its error metrics via evaluate() ---
+        # model.evaluate() returns [mse_loss, mae] in scaled space.
+        # Because MinMaxScaler is linear, multiply by scale_range to get dollar values.
+        # R² = 1 - MSE/Var(y) — equivalent to sklearn's r2_score, no extra predict() needed.
+        eval_results = full_model.evaluate([full_X_daily, full_X_fund], full_y, verbose=0)
+        mse_scaled = float(eval_results[0])
+        mae_scaled = float(eval_results[1])
+
+        scale_range = full_daily_scaler.data_max_[3] - full_daily_scaler.data_min_[3]
+        rmse    = float(np.sqrt(mse_scaled)) * scale_range
+        mae_val = mae_scaled * scale_range
+        y_var   = float(np.var(full_y))
+        r2      = float(1 - mse_scaled / y_var) if y_var > 0 else 0.0
+
+        # --- OLD accuracy approach (manual predict + sklearn) — kept for reference ---
+        # train_pred_scaled = full_model.predict([full_X_daily, full_X_fund], verbose=0).flatten()
+        # scale_min = full_daily_scaler.data_min_[3]
+        # scale_range = full_daily_scaler.data_max_[3] - scale_min
+        # train_pred_dollars = train_pred_scaled * scale_range + scale_min
+        # actual_dollars = full_y * scale_range + scale_min
+        # rmse = float(np.sqrt(mean_squared_error(actual_dollars, train_pred_dollars)))
+        # mae_val = float(mean_absolute_error(actual_dollars, train_pred_dollars))
+        # ss_res = float(np.sum((actual_dollars - train_pred_dollars) ** 2))
+        # ss_tot = float(np.sum((actual_dollars - actual_dollars.mean()) ** 2))
+        # r2 = float(1 - ss_res / ss_tot) if ss_tot > 0 else 0.0
+
+        accuracy_children = html.Div([
+            html.Div([
+                html.Div([html.Div("R²", className="label"), html.Div(f"{r2:.4f}", className="value")], className="metric-mini"),
+                html.Div([html.Div("RMSE ($)", className="label"), html.Div(f"${rmse:.2f}", className="value")], className="metric-mini"),
+                html.Div([html.Div("MAE ($)", className="label"), html.Div(f"${mae_val:.2f}", className="value")], className="metric-mini"),
+                html.Div([html.Div("Reported by model via evaluate() on training data.", className="label")], className="metric-mini"),
+                html.Div([html.Div("Predicted prices get more inaccurate as the forecast horizon increases.", className="label")], className="metric-mini"),
+            ], className="metric-row"),
+        ])
 
     except Exception:
         pass
@@ -552,12 +568,37 @@ def run_prediction(n_clicks, ticker, start_input, end_input, checklist_values):
     sent_children = None
     if view_sent or inc_sent:
         if sentiment:
+            # Stock-level sentiment (RSI, MAs, signal)
+            stock_sent_rows = [html.Div([
+                html.Span(k, className="info-key"),
+                html.Span(str(v), className="info-val"),
+            ], className="info-row") for k, v in sentiment.items()]
+
+            # Macro market sentiment — latest row from sentiment_df fetched by build_full_dataset
+            macro_rows = []
+            if sentiment_df is not None and not sentiment_df.empty:
+                latest_macro = sentiment_df.iloc[-1]
+                macro_as_of = sentiment_df.index[-1]
+                macro_display = {
+                    "VIX (Fear Index)": f"{float(latest_macro['VIX']):.2f}" if "VIX" in latest_macro and pd.notna(latest_macro["VIX"]) else "N/A",
+                    "VIX 20-day MA": f"{float(latest_macro['VIX_MA20']):.2f}" if "VIX_MA20" in latest_macro and pd.notna(latest_macro["VIX_MA20"]) else "N/A",
+                    "S&P 500": f"${float(latest_macro['SP500']):,.2f}" if "SP500" in latest_macro and pd.notna(latest_macro["SP500"]) else "N/A",
+                    "S&P 500 Daily Return": f"{float(latest_macro['SP500_Return'])*100:.2f}%" if "SP500_Return" in latest_macro and pd.notna(latest_macro["SP500_Return"]) else "N/A",
+                    "10Y Treasury Yield": f"{float(latest_macro['Treasury_10Y']):.3f}%" if "Treasury_10Y" in latest_macro and pd.notna(latest_macro["Treasury_10Y"]) else "N/A",
+                    "Market Regime": "Bull Market" if latest_macro.get("Market_Regime") == 1 else "Bear Market",
+                }
+                macro_rows = [
+                    html.H4(f"Macro Market Data (as of {macro_as_of}):"),
+                    *[html.Div([
+                        html.Span(k, className="info-key"),
+                        html.Span(str(v), className="info-val"),
+                    ], className="info-row") for k, v in macro_display.items()],
+                ]
+
             sent_children = html.Div([
-                html.H4("Current Market Sentiment:"),
-                *[html.Div([
-                    html.Span(k, className="info-key"),
-                    html.Span(str(v), className="info-val"),
-                ], className="info-row") for k, v in sentiment.items()],
+                html.H4("Current Stock Sentiment:"),
+                *stock_sent_rows,
+                *macro_rows,
             ], className="info-card")
         else:
             sent_children = html.Div("Sentiment data unavailable.", className="info-card", style={"color": "#555"})
