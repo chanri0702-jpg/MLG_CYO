@@ -83,8 +83,8 @@ def get_ticker_data(ticker, start, end):
     df['Volume_MA_20'] = df['Volume'].rolling(20).mean()
     def compute_rsi(series, period=14):
         delta = series.diff()
-        gain = delta.clip(lower=0).rolling(period).mean()
-        loss = -delta.clip(upper=0).rolling(period).mean()
+        gain = delta.clip(lower=0).ewm(com=period - 1, adjust=False).mean()
+        loss = -delta.clip(upper=0).ewm(com=period - 1, adjust=False).mean()
         rs = gain / loss
         return 100 - (100 / (1 + rs))
     df['RSI'] = compute_rsi(df['Close'])
@@ -507,12 +507,24 @@ def train_and_predict_future_period(
             rets = np.diff(closes[-21:]) / closes[-21:-1]
             next_row[10] = scale_col(float(np.std(rets)), 10)
 
-        # RSI
+        # RSI — Wilder EMA: carry avg_gain/avg_loss forward from the last historical row.
+        # last_daily_seq[-1, 13] already holds the scaled RSI of the previous day,
+        # but we need unscaled gain/loss to continue the EMA properly.
+        # Approximation: recompute from the raw close buffer using ewm, consistent
+        # with the historical compute_rsi that uses ewm(com=13, adjust=False).
         if n_daily_features > 13 and len(closes) >= 15:
-            deltas = np.diff(closes[-15:]) #get prev 15 closes
-            gains = float(np.mean(np.where(deltas > 0, deltas, 0.0)))
-            losses = float(np.mean(np.where(deltas < 0, -deltas, 0.0)))
-            rsi_val = 100.0 - (100.0 / (1.0 + gains / losses)) if losses > 0 else 100.0
+            cs = pd.Series(closes[-100:])  # enough history for EMA to converge
+            deltas = cs.diff()
+            avg_gain = deltas.clip(lower=0).ewm(com=13, adjust=False).mean()
+            avg_loss = (-deltas.clip(upper=0)).ewm(com=13, adjust=False).mean()
+            last_gain = float(avg_gain.iloc[-1])
+            last_loss = float(avg_loss.iloc[-1])
+            if last_loss > 0:
+                rsi_val = 100.0 - (100.0 / (1.0 + last_gain / last_loss))
+            elif last_gain > 0:
+                rsi_val = 100.0
+            else:
+                rsi_val = 50.0
             next_row[13] = scale_col(rsi_val, 13)
 
         # MACD and Signal line 
