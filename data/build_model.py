@@ -1,6 +1,7 @@
 
 import pandas as pd
 import sys
+import time
 import yfinance as yf
 from datetime import datetime, timedelta
 import numpy as np
@@ -20,9 +21,23 @@ future_pred_start_date = "2026-07-01"
 future_pred_end_date = "2026-07-31"
 
 
+def _retry_yf_request(fetch_fn, attempts=3, delay_seconds=1.5, retry_on_empty=True):
+    last_error = None
+    for attempt in range(attempts):
+        try:
+            result = fetch_fn()
+            if retry_on_empty and result is not None and hasattr(result, "__len__") and len(result) == 0:
+                raise ValueError("Yahoo Finance returned empty data")
+            return result
+        except Exception as exc:
+            last_error = exc
+            if attempt < attempts - 1:
+                time.sleep(delay_seconds * (attempt + 1))
+    raise last_error
+
+
 def ticker_exists(ticker):
     t = yf.Ticker(ticker)
-
     # Yahoo metadata calls are less reliable in hosted environments.
     # Treat them as an optional fast path and fall back to recent price history.
     try:
@@ -35,7 +50,7 @@ def ticker_exists(ticker):
         pass
 
     try:
-        hist = t.history(period="5d", auto_adjust=False)
+        hist = _retry_yf_request(lambda: t.history(period="5d", auto_adjust=False))
         return hist is not None and len(hist) > 0
     except Exception:
         return False
@@ -43,7 +58,7 @@ def ticker_exists(ticker):
 
 def get_date_range(ticker, max_years=5):
     t = yf.Ticker(ticker)
-    hist = t.history(period="max")
+    hist = _retry_yf_request(lambda: t.history(period="max"))
     if len(hist) == 0:
         raise ValueError(f"No data found for {ticker}")
     end_date = datetime.today()
@@ -54,7 +69,7 @@ def get_date_range(ticker, max_years=5):
 
 def get_ticker_data(ticker, start, end):
     t = yf.Ticker(ticker)
-    df = t.history(start=start, end=end)
+    df = _retry_yf_request(lambda: t.history(start=start, end=end))
     df.index = df.index.tz_localize(None)
     df['Ticker'] = ticker
     df['Daily_Return'] = df['Close'].pct_change()
@@ -100,7 +115,9 @@ def get_market_sentiment(start, end):
     tickers = {"VIX": "^VIX", "SP500": "^GSPC", "TNX": "^TNX"}
 
     def _fetch(symbol):
-        s = yf.download(symbol, start=start, end=end, progress=False)['Close'].squeeze()
+        s = _retry_yf_request(
+            lambda: yf.download(symbol, start=start, end=end, progress=False)['Close'].squeeze()
+        )
         s.index = s.index.tz_localize(None)
         return s
 
